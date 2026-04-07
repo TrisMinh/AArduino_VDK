@@ -3,21 +3,17 @@
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
 #include <Wire.h>
-
-// ================= WIFI =================
+// WIFI
 const char* ssid = "Khu H";
 const char* password = "khuh1234";
-
-// ================= WS =================
+// WS
 WebSocketsClient webSocket;
 const char* host = "10.85.7.197";
 const int port = 3000;
-
-// ================= SENSOR =================
+// SENSOR
 #define DHTPIN 15
 #define DHTTYPE DHT22
 
-// ================= HARDWARE =================
 #define RELAY_PIN 18
 #define BUZZER_PIN 19
 #define BUZZER_ON LOW
@@ -26,9 +22,8 @@ const int port = 3000;
 #define BTN_BUZZER_PIN 26
 #define BTN_MODE_PIN 27
 #define BUTTON_DEBOUNCE_MS 150
-
-// ================= LIMIT =================
-#define TEMP_LIMIT 32
+// LIMIT
+#define TEMP_LIMIT 30
 #define HUMI_LIMIT 85
 #define TEMP_ALARM 32
 #define HUMI_ALARM 95
@@ -37,54 +32,58 @@ const int port = 3000;
 DHT dht(DHTPIN, DHTTYPE);
 LiquidCrystal_I2C lcd(0x27,16,2);
 
-// ================= STATE =================
+// STATE
 enum SystemState { SYS_INIT, SYS_WIFI, SYS_WS, SYS_RUNNING, SYS_WIFI_LOST, SYS_WS_LOST };
 enum AppState { NORMAL, WARNING, ALARM, ERROR_STATE };
 enum ControlMode { MODE_AUTO, MODE_MANUAL };
 enum FanState { FAN_OFF, FAN_ON };
-enum BuzzerState { BUZZER_IDLE, BUZZER_STEADY_ON, BUZZER_BLINK };
+enum BuzzerState { BUZZER_IDLE, BUZZER_STEADY, BUZZER_BLINK };
 
-SystemState sysState = SYS_INIT;
+SystemState sysState = SYS_INIT; // TRẠNG THÁI BAN ĐẦU
 AppState appState = NORMAL;
 AppState lastState = NORMAL;
 AppState pendingAppState = NORMAL;
+
 ControlMode controlMode = MODE_AUTO;
 ControlMode lastControlMode = MODE_AUTO;
+
 FanState autoFanState = FAN_OFF;
 FanState manualFanState = FAN_OFF;
 FanState fanState = FAN_OFF;
+
 BuzzerState autoBuzzerState = BUZZER_IDLE;
 BuzzerState buzzerState = BUZZER_IDLE;
 
-// ================= DATA =================
+// DATA
 float temp = 0, humi = 0;
 bool errorSensor = false;
 int errorSensorCount = 0;
 
-// ================= CONTROL =================
+// CONTROL
 bool buzzerOn = false;
 unsigned long buzzer_time = 0;
 
-// ================= TIMER =================
+// TIMER
 unsigned long lastSensor = 0;
 unsigned long lastLCD = 0;
 unsigned long lastReconnectWiFi = 0;
 unsigned long lastReconnectWS = 0;
 unsigned long lastSend = 0;
 unsigned long appStateSince = 0;
+//debounce
 unsigned long lastFanButtonTime = 0;
 unsigned long lastBuzzerButtonTime = 0;
 unsigned long lastModeButtonTime = 0;
 bool lastFanButtonLevel = HIGH;
 bool lastBuzzerButtonLevel = HIGH;
 bool lastModeButtonLevel = HIGH;
-bool statusDirty = false;
-bool manualBuzzerLatchedOff = false;
-
-// ================= WS =================
+//FORSE SEND DATA
+bool needStatusUpdate = false;
+bool manualBuzzerLatchedOff = false; // CỜ TẮT MANUAL BUZZER (CÒI K TỰ KÊU LẠI)
+// WS
 bool wsConnected = false;
 
-// ================= LOG =================
+// LOG
 const char* appStateName(AppState state) {
   switch(state) {
     case NORMAL: return "NORMAL";
@@ -92,7 +91,6 @@ const char* appStateName(AppState state) {
     case ALARM: return "ALARM";
     case ERROR_STATE: return "ERROR";
   }
-
   return "UNKNOWN";
 }
 
@@ -101,7 +99,6 @@ const char* controlModeName(ControlMode mode) {
     case MODE_AUTO: return "AUTO";
     case MODE_MANUAL: return "MANUAL";
   }
-
   return "UNKNOWN";
 }
 
@@ -110,17 +107,15 @@ const char* fanStateName(FanState state) {
     case FAN_OFF: return "OFF";
     case FAN_ON: return "ON";
   }
-
   return "UNKNOWN";
 }
 
 const char* buzzerStateName(BuzzerState state) {
   switch(state) {
     case BUZZER_IDLE: return "OFF";
-    case BUZZER_STEADY_ON: return "ON";
+    case BUZZER_STEADY: return "ON";
     case BUZZER_BLINK: return "BLINK";
   }
-
   return "UNKNOWN";
 }
 
@@ -133,21 +128,16 @@ const char* systemStateName(SystemState state) {
     case SYS_WIFI_LOST: return "WIFI_LOST";
     case SYS_WS_LOST: return "WS_LOST";
   }
-
   return "UNKNOWN";
 }
 
 void logLine(const char* tag, const String& message) {
-  Serial.print('[');
-  Serial.print(millis());
-  Serial.print(" ms]");
-  Serial.print('[');
-  Serial.print(tag);
-  Serial.print("] ");
+  Serial.print('['); Serial.print(millis()); Serial.print(" ms]");
+  Serial.print('['); Serial.print(tag); Serial.print("] ");
   Serial.println(message);
 }
 
-bool buttonPressed(int pin, unsigned long& lastTime, bool& lastLevel) {
+bool buttonPressed(int pin, unsigned long& lastTime, bool& lastLevel) { // HÀM KIỂM TRA NHẤN NÚT HỢP LỆ
   bool currentLevel = digitalRead(pin);
   bool pressed = false;
 
@@ -160,13 +150,13 @@ bool buttonPressed(int pin, unsigned long& lastTime, bool& lastLevel) {
   return pressed;
 }
 
-// ================= WIFI =================
+// WIFI
 void connectWiFi() {
   logLine("WIFI", "Connecting to SSID: " + String(ssid));
   WiFi.begin(ssid, password);
 }
 
-// ================= SYSTEM STATE =================
+// SYSTEM STATE
 void updateSystemState() {
   SystemState previousState = sysState;
 
@@ -212,7 +202,7 @@ void updateSystemState() {
   }
 }
 
-// ================= HANDLE SYSTEM =================
+// HANDLE SYSTEM
 void handleSystemState() {
 
   switch(sysState) {
@@ -257,7 +247,7 @@ void handleSystemState() {
   }
 }
 
-// ================= WS EVENT =================
+// WS EVENT
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
   switch(type) {
@@ -281,7 +271,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   }
 }
 
-// ================= SENSOR =================
+// SENSOR
 void readSensor() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
@@ -307,7 +297,7 @@ void readSensor() {
   logLine("SENSOR", "temp=" + String(temp, 1) + "C, humi=" + String(humi, 1) + "%");
 }
 
-// ================= APP STATE =================
+// APP STATE
 AppState getRawAppState() {
   if(errorSensor) return ERROR_STATE;
   if(temp > TEMP_ALARM || humi > HUMI_ALARM) return ALARM;
@@ -337,7 +327,7 @@ void updateAppState() {
   }
 }
 
-// ================= CONTROL =================
+// CONTROL
 void updateAutoOutputState() {
   switch(appState) {
     case NORMAL:
@@ -357,7 +347,7 @@ void updateAutoOutputState() {
 
     case ERROR_STATE:
       autoFanState = FAN_ON;
-      autoBuzzerState = BUZZER_STEADY_ON;
+      autoBuzzerState = BUZZER_STEADY;
       break;
   }
 }
@@ -408,7 +398,7 @@ void applyOutputState() {
       digitalWrite(BUZZER_PIN, BUZZER_OFF);
       break;
 
-    case BUZZER_STEADY_ON:
+    case BUZZER_STEADY:
       buzzerOn = true;
       digitalWrite(BUZZER_PIN, BUZZER_ON);
       break;
@@ -448,7 +438,7 @@ void handleAppState() {
   applyOutputState();
 }
 
-// ================= MANUAL CONTROL =================
+// MANUAL CONTROL
 void setManualFan(bool on) {
   manualFanState = on ? FAN_ON : FAN_OFF;
 }
@@ -479,37 +469,37 @@ void muteManualBuzzer() {
 void handleButtons() {
   if(buttonPressed(BTN_MODE_PIN, lastModeButtonTime, lastModeButtonLevel)) {
     toggleMode();
-    statusDirty = true;
+    needStatusUpdate = true;
   }
 
   if(buttonPressed(BTN_FAN_PIN, lastFanButtonTime, lastFanButtonLevel)) {
     toggleManualFan();
-    statusDirty = true;
+    needStatusUpdate = true;
   }
 
   if(buttonPressed(BTN_BUZZER_PIN, lastBuzzerButtonTime, lastBuzzerButtonLevel)) {
     muteManualBuzzer();
-    statusDirty = true;
+    needStatusUpdate = true;
   }
 }
 
 void handleWsCommand(String msg) {
   if(msg == "{\"mode\":\"MANUAL\"}" || msg == "{\"mode\":\"manual\"}") {
     switchToManual();
-    statusDirty = true;
+    needStatusUpdate = true;
     return;
   }
 
   if(msg == "{\"mode\":\"AUTO\"}" || msg == "{\"mode\":\"auto\"}") {
     switchToAuto();
-    statusDirty = true;
+    needStatusUpdate = true;
     return;
   }
 
   if(msg == "{\"fan\":\"ON\"}" || msg == "{\"fan\":\"on\"}") {
     if(controlMode == MODE_MANUAL) {
       setManualFan(true);
-      statusDirty = true;
+      needStatusUpdate = true;
     }
     return;
   }
@@ -517,7 +507,7 @@ void handleWsCommand(String msg) {
   if(msg == "{\"fan\":\"OFF\"}" || msg == "{\"fan\":\"off\"}") {
     if(controlMode == MODE_MANUAL) {
       setManualFan(false);
-      statusDirty = true;
+      needStatusUpdate = true;
     }
     return;
   }
@@ -526,13 +516,13 @@ void handleWsCommand(String msg) {
      msg == "{\"buzzer\":\"MUTE\"}" || msg == "{\"buzzer\":\"mute\"}") {
     if(controlMode == MODE_MANUAL) {
       setManualBuzzer(false);
-      statusDirty = true;
+      needStatusUpdate = true;
     }
     return;
   }
 }
 
-// ================= STATUS SEND =================
+// STATUS SEND
 void sendStatus(bool forceSend = false) {
   if(!wsConnected) return;
   if(!forceSend && millis() - lastSend <= 3000) return;
@@ -554,29 +544,35 @@ void sendStatus(bool forceSend = false) {
   logLine(forceSend ? "STATE TX" : "STATUS TX", data);
 }
 
-// ================= LCD =================
+// LCD
 char line1[17];
 char line2[17];
 
 void displayLCD() {
 
-  snprintf(line1, sizeof(line1), "T:%5.1fC", temp);
-  snprintf(line2, sizeof(line2), "H:%5.1f%%", humi);
+  if(appState == ERROR_STATE) {
+    snprintf(line1, sizeof(line1), "SENSOR ERROR    ");
+  } else {
+    snprintf(line1, sizeof(line1), "T:%4.1fC H:%4.1f%%", temp, humi);
+  }
+
+  const char* f_str = (fanState == FAN_ON) ? "ON" : "OF";
+  const char* b_str = "OF";
+  if (buzzerState == BUZZER_STEADY) b_str = "ON";
+  else if (buzzerState == BUZZER_BLINK) b_str = "BL";
+  
+  const char* m_str = (controlMode == MODE_AUTO) ? "AUTO" : "MAN ";
+
+  snprintf(line2, sizeof(line2), "F:%s B:%s M:%s", f_str, b_str, m_str);
 
   lcd.setCursor(0,0);
   lcd.print(line1);
 
   lcd.setCursor(0,1);
-
-  switch(appState) {
-    case NORMAL: lcd.print(line2); lcd.print(controlMode == MODE_AUTO ? " AN" : " MN"); break;
-    case WARNING: lcd.print(line2); lcd.print(controlMode == MODE_AUTO ? " AW" : " MW"); break;
-    case ALARM: lcd.print(line2); lcd.print(controlMode == MODE_AUTO ? " AA" : " MA"); break;
-    case ERROR_STATE: lcd.print("SENSOR ERROR   "); break;
-  }
+  lcd.print(line2);
 }
 
-// ================= SETUP =================
+// SETUP
 void setup() {
   Serial.begin(115200);
 
@@ -600,7 +596,7 @@ void setup() {
   connectWiFi();
 }
 
-// ================= LOOP =================
+// LOOP
 void loop() {
 
   webSocket.loop();
@@ -617,9 +613,9 @@ void loop() {
   handleButtons();
   handleAppState();
 
-  if(statusDirty) {
+  if(needStatusUpdate) {
     sendStatus(true);
-    statusDirty = false;
+    needStatusUpdate = false;
   }
 
   if(appState != lastState) {
