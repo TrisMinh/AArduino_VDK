@@ -2,12 +2,11 @@
 #include <WebSocketsClient.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
-#include <Wire.h>
-// WIFI
-const char* ssid = "A Cuong 007";
+#include <Wire.h> 
+const char* ssid = "A Cuong 007";// WIFI
 const char* password = "01699408589";
-// WS
-WebSocketsClient webSocket;
+
+WebSocketsClient webSocket;// WS
 const char* host = "192.168.1.86";
 const int port = 3000;
 // SENSOR
@@ -54,17 +53,14 @@ FanState fanState = FAN_OFF;
 BuzzerState autoBuzzerState = BUZZER_IDLE;
 BuzzerState buzzerState = BUZZER_IDLE;
 
-// DATA
-float temp = 0, humi = 0;
+float temp = 0, humi = 0;// biến data
 bool errorSensor = false;
 int errorSensorCount = 0;
 
-// CONTROL
-bool buzzerOn = false;
+bool buzzerOn = false;// CONTROL
 unsigned long buzzer_time = 0;
 
-// TIMER
-unsigned long lastSensor = 0;
+unsigned long lastSensor = 0;// bộ đếm
 unsigned long lastLCD = 0;
 unsigned long lastReconnectWiFi = 0;
 unsigned long lastReconnectWS = 0;
@@ -77,11 +73,10 @@ unsigned long lastModeButtonTime = 0;
 bool lastFanButtonLevel = HIGH;
 bool lastBuzzerButtonLevel = HIGH;
 bool lastModeButtonLevel = HIGH;
-//FORSE SEND DATA
-bool needStatusUpdate = false;
+bool needStatusUpdate = false;//FORSE SEND DATA
 bool manualBuzzerLatchedOff = false; // CỜ TẮT MANUAL BUZZER (CÒI K TỰ KÊU LẠI)
-// WS
-bool wsConnected = false;
+
+bool wsConnected = false;// WS
 
 // LOG
 const char* appStateName(AppState state) {
@@ -93,7 +88,6 @@ const char* appStateName(AppState state) {
   }
   return "UNKNOWN";
 }
-
 const char* controlModeName(ControlMode mode) {
   switch(mode) {
     case MODE_AUTO: return "AUTO";
@@ -101,7 +95,6 @@ const char* controlModeName(ControlMode mode) {
   }
   return "UNKNOWN";
 }
-
 const char* fanStateName(FanState state) {
   switch(state) {
     case FAN_OFF: return "OFF";
@@ -109,7 +102,6 @@ const char* fanStateName(FanState state) {
   }
   return "UNKNOWN";
 }
-
 const char* buzzerStateName(BuzzerState state) {
   switch(state) {
     case BUZZER_IDLE: return "OFF";
@@ -118,7 +110,6 @@ const char* buzzerStateName(BuzzerState state) {
   }
   return "UNKNOWN";
 }
-
 const char* systemStateName(SystemState state) {
   switch(state) {
     case SYS_INIT: return "INIT";
@@ -140,37 +131,58 @@ void logLine(const char* tag, const String& message) {
 bool buttonPressed(int pin, unsigned long& lastTime, bool& lastLevel) { // HÀM KIỂM TRA NHẤN NÚT HỢP LỆ
   bool currentLevel = digitalRead(pin);
   bool pressed = false;
-
   if(lastLevel == HIGH && currentLevel == LOW && millis() - lastTime > BUTTON_DEBOUNCE_MS) {
     lastTime = millis();
     pressed = true;
   }
-
   lastLevel = currentLevel;
   return pressed;
 }
 
-// WIFI
 void connectWiFi() {
   logLine("WIFI", "Connecting to SSID: " + String(ssid));
   WiFi.begin(ssid, password);
 }
 
-// SYSTEM STATE
-void updateSystemState() {
-  SystemState previousState = sysState;
+void connectWS() {
+  logLine("WS", "Opening socket to " + String(host) + ":" + String(port));
+  webSocket.begin(host, port, "/esp");
+  webSocket.onEvent(webSocketEvent);
+}
 
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {// WS EVENT
+  switch(type) {
+    case WStype_CONNECTED:
+      logLine("WS", "Connected to " + String(host) + ":" + String(port) + String("/esp"));
+      wsConnected = true;
+      break;
+    case WStype_DISCONNECTED:
+      logLine("WS", "Disconnected");
+      wsConnected = false;
+      break;
+    case WStype_TEXT: {
+      String msg = String((char*)payload);
+      logLine("WS RX", msg);
+      handleWsCommand(msg);
+      break;
+    }
+  }
+}
+
+void updateSystemState() {// SYSTEM STATE
+  SystemState previousState = sysState;
   switch(sysState) {
     case SYS_INIT:
       sysState = SYS_WIFI;
       break;
-
     case SYS_WIFI:
+    case SYS_WIFI_LOST:
       if(WiFi.status() == WL_CONNECTED)
         sysState = SYS_WS;
       break;
 
     case SYS_WS:
+    case SYS_WS_LOST:
       if(WiFi.status() != WL_CONNECTED)
         sysState = SYS_WIFI_LOST;
       else if(wsConnected)
@@ -183,20 +195,7 @@ void updateSystemState() {
       else if(!wsConnected)
         sysState = SYS_WS_LOST;
       break;
-
-    case SYS_WIFI_LOST:
-      if(WiFi.status() == WL_CONNECTED)
-        sysState = SYS_WS;
-      break;
-
-    case SYS_WS_LOST:
-      if(WiFi.status() != WL_CONNECTED)
-        sysState = SYS_WIFI_LOST;
-      else if(wsConnected)
-        sysState = SYS_RUNNING;
-      break;
   }
-
   if(sysState != previousState) {
     logLine("SYSTEM", String(systemStateName(previousState)) + " -> " + systemStateName(sysState));
   }
@@ -204,70 +203,22 @@ void updateSystemState() {
 
 // HANDLE SYSTEM
 void handleSystemState() {
-
   switch(sysState) {
-
     case SYS_WIFI:
-      if (WiFi.status() != WL_CONNECTED) {
-        if (millis() - lastReconnectWiFi > 5000) {
-          lastReconnectWiFi = millis();
-          connectWiFi();
-        }
-      }
-      break;
-
-    case SYS_WS:
-      if (!wsConnected) {
-        if (millis() - lastReconnectWS > 5000) {
-          lastReconnectWS = millis();
-          logLine("WS", "Opening socket to " + String(host) + ":" + String(port));
-          webSocket.begin(host, port, "/esp");
-          webSocket.onEvent(webSocketEvent);
-        }
-      }
-      break;
-
     case SYS_WIFI_LOST:
-      if (millis() - lastReconnectWiFi > 5000) {
+      if (WiFi.status() != WL_CONNECTED && millis() - lastReconnectWiFi > 5000) {
         lastReconnectWiFi = millis();
         connectWiFi();
       }
       break;
 
+    case SYS_WS:
     case SYS_WS_LOST:
-      if (!wsConnected) {
-        if (millis() - lastReconnectWS > 5000) {
-          lastReconnectWS = millis();
-          logLine("WS", "Reopening socket to " + String(host) + ":" + String(port));
-          webSocket.begin(host, port, "/esp");
-          webSocket.onEvent(webSocketEvent);
-        }
+      if (!wsConnected && millis() - lastReconnectWS > 5000) {
+        lastReconnectWS = millis();
+        connectWS();
       }
       break;
-  }
-}
-
-// WS EVENT
-void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-
-  switch(type) {
-    case WStype_CONNECTED:
-      logLine("WS", "Connected to " + String(host) + ":" + String(port) + String("/esp"));
-      wsConnected = true;
-      break;
-
-    case WStype_DISCONNECTED:
-      logLine("WS", "Disconnected");
-      wsConnected = false;
-      break;
-
-    case WStype_TEXT: {
-      String msg = String((char*)payload);
-
-      logLine("WS RX", msg);
-      handleWsCommand(msg);
-      break;
-    }
   }
 }
 
@@ -275,30 +226,27 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 void readSensor() {
   float t = dht.readTemperature();
   float h = dht.readHumidity();
-
   if (isnan(t) || isnan(h)) {
-    delay(50);
     t = dht.readTemperature();
     h = dht.readHumidity();
   }
-
   if (isnan(t) || isnan(h)) {
-    errorSensorCount++;
-    if(errorSensorCount >= 5) errorSensor = true;
-    logLine("SENSOR", "Read failed, retryCount=" + String(errorSensorCount));
+    if (errorSensorCount < 5) {
+      errorSensorCount++;
+      if (errorSensorCount == 5) {
+        errorSensor = true;
+        logLine("SENSOR", "Error reading DHT22!");
+      }
+    }
     return;
   }
-
-  temp = t;
-  humi = h;
-  errorSensor = false;
-  errorSensorCount = 0;
-
+  temp = t; humi = h;
+  errorSensor = false; errorSensorCount = 0; //reset bộ đếm lỗi
   logLine("SENSOR", "temp=" + String(temp, 1) + "C, humi=" + String(humi, 1) + "%");
 }
 
 // APP STATE
-AppState getRawAppState() {
+AppState getRawAppState() { //lấy trạng thái hiện tại của app
   if(errorSensor) return ERROR_STATE;
   if(temp > TEMP_ALARM || humi > HUMI_ALARM) return ALARM;
   if(temp > TEMP_LIMIT || humi > HUMI_LIMIT) return WARNING;
@@ -306,22 +254,19 @@ AppState getRawAppState() {
 }
 
 void updateAppState() {
-  AppState rawState = getRawAppState();
-
-  if(rawState == appState) {
+  AppState rawState = getRawAppState(); // so sánh trạng thái hiện tại với trạng thái chờ
+  if(rawState == appState) { // giống thì k đổi gì
     pendingAppState = appState;
     appStateSince = 0;
     return;
   }
-
-  if(rawState != pendingAppState) {
+  if(rawState != pendingAppState) { //khác thì kích hoạt pending
     pendingAppState = rawState;
     appStateSince = millis();
     logLine("STATE WAIT", String(appStateName(appState)) + " -> " + appStateName(rawState) + " pending");
     return;
   }
-
-  if(appStateSince != 0 && millis() - appStateSince >= APP_STATE_CONFIRM_MS) {
+  if(appStateSince != 0 && millis() - appStateSince >= APP_STATE_CONFIRM_MS) { // đủ thời gian thì đổi
     appState = pendingAppState;
     appStateSince = 0;
   }
@@ -334,17 +279,14 @@ void updateAutoOutputState() {
       autoFanState = FAN_OFF;
       autoBuzzerState = BUZZER_IDLE;
       break;
-
     case WARNING:
       autoFanState = FAN_ON;
       autoBuzzerState = BUZZER_IDLE;
       break;
-
     case ALARM:
       autoFanState = FAN_ON;
       autoBuzzerState = BUZZER_BLINK;
       break;
-
     case ERROR_STATE:
       autoFanState = FAN_ON;
       autoBuzzerState = BUZZER_STEADY;
@@ -352,15 +294,14 @@ void updateAutoOutputState() {
   }
 }
 
-void switchToManual() {
-  controlMode = MODE_MANUAL;
-  manualFanState = fanState;
-  manualBuzzerLatchedOff = (buzzerState == BUZZER_IDLE);
-}
-
-void switchToAuto() {
-  controlMode = MODE_AUTO;
-  manualBuzzerLatchedOff = false;
+void handleControlMode() {
+  if(controlMode != lastControlMode) {
+    logLine("MODE", String(controlModeName(lastControlMode)) + " -> " + controlModeName(controlMode));
+    if(controlMode == MODE_MANUAL) {
+      manualFanState = fanState;
+    }
+    lastControlMode = controlMode;
+  }
 }
 
 void resolveOutputState() {
@@ -385,13 +326,10 @@ void resolveOutputState() {
 }
 
 void applyOutputState() {
-
   if(buzzerState != BUZZER_BLINK) {
     buzzer_time = 0;
   }
-
   digitalWrite(RELAY_PIN, fanState == FAN_ON ? HIGH : LOW);
-
   switch(buzzerState) {
     case BUZZER_IDLE:
       buzzerOn = false;
@@ -419,23 +357,22 @@ void applyOutputState() {
   }
 }
 
-void handleControlMode() {
-  if(controlMode != lastControlMode) {
-    logLine("MODE", String(controlModeName(lastControlMode)) + " -> " + controlModeName(controlMode));
-
-    if(controlMode == MODE_MANUAL) {
-      manualFanState = fanState;
-    }
-
-    lastControlMode = controlMode;
-  }
-}
-
 void handleAppState() {
   updateAutoOutputState();
   handleControlMode();
   resolveOutputState();
   applyOutputState();
+}
+
+void switchToManual() {
+  controlMode = MODE_MANUAL;
+  manualFanState = fanState;
+  manualBuzzerLatchedOff = (buzzerState == BUZZER_IDLE);
+}
+
+void switchToAuto() {
+  controlMode = MODE_AUTO;
+  manualBuzzerLatchedOff = false;
 }
 
 // MANUAL CONTROL
@@ -444,13 +381,13 @@ void setManualFan(bool on) {
 }
 
 void setManualBuzzer(bool on) {
-  // Manual buzzer control is mute-only.
+  // chỉ tắt k bật
   if(!on) {
     manualBuzzerLatchedOff = true;
     buzzerState = BUZZER_IDLE;
   }
 }
-
+// 3 hàm xử lý nút nhấn
 void toggleMode() {
   if(controlMode == MODE_AUTO) switchToManual();
   else switchToAuto();
@@ -482,7 +419,7 @@ void handleButtons() {
     needStatusUpdate = true;
   }
 }
-
+// xử lý ws
 void handleWsCommand(String msg) {
   if(msg == "{\"mode\":\"MANUAL\"}" || msg == "{\"mode\":\"manual\"}") {
     switchToManual();
@@ -533,8 +470,8 @@ void sendStatus(bool forceSend = false) {
   data += "\"temp\":" + String(temp) + ",";
   data += "\"humi\":" + String(humi) + ",";
   data += "\"mode\":\"" + String(controlModeName(controlMode)) + "\",";
-  data += "\"fan\":" + String(fanState == FAN_ON) + ",";
-  data += "\"buzzer_state\":" + String(buzzerState == BUZZER_IDLE ? 0 : 1) + ",";
+  data += "\"fan\":\"" + String(fanState == FAN_ON ? "ON" : "OFF") + "\",";
+  data += "\"buzzer_state\":\"" + String(buzzerState == BUZZER_IDLE ? "OFF" : "ON") + "\",";
   
   data += "\"app_state\":\"" + String(appStateName(appState)) + "\"";
   data += "}";
@@ -545,31 +482,16 @@ void sendStatus(bool forceSend = false) {
 }
 
 // LCD
-char line1[17];
-char line2[17];
-
 void displayLCD() {
+  lcd.setCursor(0, 0);
+  if(appState == ERROR_STATE) lcd.print("SENSOR ERROR    ");
+  else lcd.print("T:" + String(temp, 1) + "C H:" + String(humi, 1) + "%  ");
 
-  if(appState == ERROR_STATE) {
-    snprintf(line1, sizeof(line1), "SENSOR ERROR    ");
-  } else {
-    snprintf(line1, sizeof(line1), "T:%4.1fC H:%4.1f%%", temp, humi);
-  }
-
-  const char* f_str = (fanState == FAN_ON) ? "ON" : "OF";
-  const char* b_str = "OF";
-  if (buzzerState == BUZZER_STEADY) b_str = "ON";
-  else if (buzzerState == BUZZER_BLINK) b_str = "BL";
-  
-  const char* m_str = (controlMode == MODE_AUTO) ? "AUTO" : "MAN ";
-
-  snprintf(line2, sizeof(line2), "F:%s B:%s M:%s", f_str, b_str, m_str);
-
-  lcd.setCursor(0,0);
-  lcd.print(line1);
-
-  lcd.setCursor(0,1);
-  lcd.print(line2);
+  lcd.setCursor(0, 1);
+  String f = (fanState == FAN_ON) ? "ON" : "OF";
+  String b = (buzzerState == BUZZER_STEADY) ? "ON" : (buzzerState == BUZZER_BLINK ? "BL" : "OF");
+  String m = (controlMode == MODE_AUTO) ? "AUTO" : "MAN ";
+  lcd.print("F:" + f + " B:" + b + " M:" + m);
 }
 
 // SETUP
@@ -620,6 +542,11 @@ void loop() {
 
   if(appState != lastState) {
     logLine("STATE", String(appStateName(lastState)) + " -> " + appStateName(appState));
+
+    if(lastState == ERROR_STATE && appState == NORMAL) { // khởi động lại lcd tránh bị lỗi chữ
+      lcd.init();      
+      lcd.backlight(); 
+    }
 
     sendStatus(true);
     lastState = appState;
