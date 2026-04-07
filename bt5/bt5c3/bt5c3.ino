@@ -273,7 +273,7 @@ void updateAppState() {
 }
 
 // CONTROL
-void updateAutoOutputState() {
+void updateAutoOutputState() { // trung gian chỉ gán vào biến của auto
   switch(appState) {
     case NORMAL:
       autoFanState = FAN_OFF;
@@ -304,7 +304,7 @@ void handleControlMode() {
   }
 }
 
-void resolveOutputState() {
+void resolveOutputState() { // gán giá trị từ auto/manual vào biến cuối cùng
   if(controlMode == MODE_MANUAL) {
     if(manualBuzzerLatchedOff) {
       buzzerState = BUZZER_IDLE;
@@ -325,7 +325,7 @@ void resolveOutputState() {
   }
 }
 
-void applyOutputState() {
+void applyOutputState() { // áp dụng vào phần cứng
   if(buzzerState != BUZZER_BLINK) {
     buzzer_time = 0;
   }
