@@ -3,11 +3,11 @@
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
 #include <Wire.h> 
-const char* ssid = "A Cuong 007";// WIFI
-const char* password = "01699408589";
+const char* ssid = "Khu H";// WIFI
+const char* password = "khuh1234";
 
 WebSocketsClient webSocket;// WS
-const char* host = "192.168.1.86";
+const char* host = "10.85.7.197";
 const int port = 3000;
 // SENSOR
 #define DHTPIN 15

@@ -1,0 +1,212 @@
+#include <ESP32Servo.h>
+
+//////////////////////////////////////////////////
+// SERVO
+//////////////////////////////////////////////////
+
+Servo horizontal;
+Servo vertical;
+
+//////////////////////////////////////////////////
+// START POSITION
+//////////////////////////////////////////////////
+
+int servohori = 90;
+int servovert = 45;
+
+//////////////////////////////////////////////////
+// LIMIT
+//////////////////////////////////////////////////
+
+int servohoriLimitHigh = 175;
+int servohoriLimitLow  = 5;
+
+int servovertLimitHigh = 100;
+int servovertLimitLow  = 1;
+
+//////////////////////////////////////////////////
+// LDR PIN (ESP32)
+//////////////////////////////////////////////////
+
+#define LDR_TOP_LEFT      33
+#define LDR_BOTTOM_LEFT   32
+#define LDR_BOTTOM_RIGHT  35
+#define LDR_TOP_RIGHT     34
+
+//////////////////////////////////////////////////
+// SERVO PIN
+//////////////////////////////////////////////////
+
+#define SERVO_HORIZONTAL_PIN   18
+#define SERVO_VERTICAL_PIN     19
+
+//////////////////////////////////////////////////
+// TRACKING
+//////////////////////////////////////////////////
+
+int tolerance = 120;
+int stepSize  = 3;
+
+unsigned long lastTracking = 0;
+
+//////////////////////////////////////////////////
+// READ LDR WITH FILTER
+//////////////////////////////////////////////////
+
+int readLDR(int pin)
+{
+  long total = 0;
+
+  for(int i = 0; i < 10; i++)
+  {
+    total += analogRead(pin);
+    delayMicroseconds(200);
+  }
+
+  int value = total / 10;
+
+  return map(value, 0, 4095, 0, 1000);
+}
+
+//////////////////////////////////////////////////
+// SETUP
+//////////////////////////////////////////////////
+
+void setup()
+{
+  Serial.begin(115200);
+
+  analogReadResolution(12);
+
+  //////////////////////////////////////////////////
+  // ATTACH SERVO
+  //////////////////////////////////////////////////
+
+  horizontal.attach(SERVO_HORIZONTAL_PIN);
+  vertical.attach(SERVO_VERTICAL_PIN);
+
+  //////////////////////////////////////////////////
+  // START POSITION
+  //////////////////////////////////////////////////
+
+  horizontal.write(servohori);
+  vertical.write(servovert);
+
+  delay(1000);
+
+  Serial.println("2 Axis Solar Tracker Started");
+}
+
+//////////////////////////////////////////////////
+// LOOP
+//////////////////////////////////////////////////
+
+void loop()
+{
+  //////////////////////////////////////////////////
+  // FAST TRACKING
+  //////////////////////////////////////////////////
+
+  if(millis() - lastTracking >= 30)
+  {
+    lastTracking = millis();
+
+    //////////////////////////////////////////////////
+    // READ SENSOR
+    //////////////////////////////////////////////////
+
+    int lt = readLDR(LDR_TOP_LEFT);
+    int rt = readLDR(LDR_TOP_RIGHT);
+    int ld = readLDR(LDR_BOTTOM_LEFT);
+    int rd = readLDR(LDR_BOTTOM_RIGHT);
+
+    //////////////////////////////////////////////////
+    // AVERAGE
+    //////////////////////////////////////////////////
+
+    int avt = (lt + rt) / 2;
+    int avd = (ld + rd) / 2;
+
+    int avl = (lt + ld) / 2;
+    int avr = (rt + rd) / 2;
+
+    //////////////////////////////////////////////////
+    // DIFFERENCE
+    //////////////////////////////////////////////////
+
+    int dvert  = avt - avd;
+    int dhoriz = avl - avr;
+
+    //////////////////////////////////////////////////
+    // VERTICAL TRACKING
+    //////////////////////////////////////////////////
+
+    if(abs(dvert) > tolerance)
+    {
+      if(avt > avd)
+      {
+        servovert += stepSize;
+      }
+      else
+      {
+        servovert -= stepSize;
+      }
+
+      servovert = constrain(
+        servovert,
+        servovertLimitLow,
+        servovertLimitHigh
+      );
+
+      vertical.write(servovert);
+    }
+
+    //////////////////////////////////////////////////
+    // HORIZONTAL TRACKING
+    //////////////////////////////////////////////////
+
+    if(abs(dhoriz) > tolerance)
+    {
+      if(avl > avr)
+      {
+        servohori -= stepSize;
+      }
+      else
+      {
+        servohori += stepSize;
+      }
+
+      servohori = constrain(
+        servohori,
+        servohoriLimitLow,
+        servohoriLimitHigh
+      );
+
+      horizontal.write(servohori);
+    }
+
+    //////////////////////////////////////////////////
+    // DEBUG
+    //////////////////////////////////////////////////
+
+    Serial.print("LT: ");
+    Serial.print(lt);
+
+    Serial.print(" | RT: ");
+    Serial.print(rt);
+
+    Serial.print(" | LD: ");
+    Serial.print(ld);
+
+    Serial.print(" | RD: ");
+    Serial.print(rd);
+
+    Serial.print(" | V: ");
+    Serial.print(servovert);
+
+    Serial.print(" | H: ");
+    Serial.println(servohori);
+  }
+
+  delay(2);
+}
