@@ -3,14 +3,14 @@
 #include <coap-simple.h>
 #include <ESP32Servo.h>
 
-// ================= WIFI =================
+// WIFI
 
 const char* WIFI_SSID = "Khu H";
 const char* WIFI_PASS = "khuh1234";
 
 String SECRET_KEY = "SUNTRAC123";
 
-// ================= SERVO =================
+// SERVO
 
 Servo horizontal;
 Servo vertical;
@@ -24,30 +24,30 @@ int servohoriLimitLow = 10;
 int servovertLimitHigh = 80;
 int servovertLimitLow = 10;
 
-// ================= LDR =================
+// LDR
 
-#define LDR_TOP_LEFT     33
-#define LDR_BOTTOM_LEFT  32
+#define LDR_TOP_LEFT 33
+#define LDR_BOTTOM_LEFT 32
 #define LDR_BOTTOM_RIGHT 35
-#define LDR_TOP_RIGHT    34
+#define LDR_TOP_RIGHT 34
 
-// ================= SERVO PINS =================
+// SERVO PINS
 
 #define SERVO_HORIZONTAL_PIN 18
-#define SERVO_VERTICAL_PIN   19
+#define SERVO_VERTICAL_PIN 19
 
-// ================= TRACKING =================
+// TRACKING
 
 int tolerance = 150;
 int stepSize = 1;
 
-// ================= RAIN SENSOR =================
+// RAIN SENSOR
 
 #define RAIN_SENSOR_PIN 36
 
 bool rainDetected = false;
 
-// ================= STEPPER MOTOR =================
+// STEPPER MOTOR
 
 #define IN1 25
 #define IN2 26
@@ -70,8 +70,7 @@ long positionSteps = 0;
 
 bool umbrellaOpened = false;
 
-enum UmbrellaMotionState
-{
+enum UmbrellaMotionState {
   UMBRELLA_IDLE,
   UMBRELLA_OPENING,
   UMBRELLA_HOMING,
@@ -87,26 +86,26 @@ int umbrellaHomeSteps = 0;
 
 unsigned long homePressedSince = 0;
 unsigned long umbrellaSettleStart = 0;
+unsigned long lastUmbrellaStepMicros = 0;
 
-// ================= SYSTEM =================
+// SYSTEM
 
 unsigned long lastTracking = 0;
 unsigned long lastLogTime = 0;
 unsigned long lastWiFiCheck = 0;
 
 bool wifiConnectedLogged = false;
+bool wifiEverConnected = false;
 bool coapStarted = false;
 
-// ================= STATE MACHINE =================
+// STATE MACHINE
 
-enum ControlMode
-{
+enum ControlMode {
   MODE_AUTO,
   MODE_MANUAL
 };
 
-enum AppState
-{
+enum AppState {
   STATE_WIFI_CONNECTING,
   STATE_WIFI_LOST,
   STATE_AUTO_TRACKING,
@@ -119,54 +118,39 @@ ControlMode currentMode = MODE_AUTO;
 AppState currentState = STATE_WIFI_CONNECTING;
 AppState previousState = STATE_WIFI_CONNECTING;
 
-// ================= COAP =================
+// COAP
 
 WiFiUDP udp;
 Coap coap(udp);
 
-// ================= STEP SEQUENCE =================
+// STEP SEQUENCE
 
 const int stepSequence[8][4] = {
-  {1,0,0,0},
-  {1,1,0,0},
-  {0,1,0,0},
-  {0,1,1,0},
-  {0,0,1,0},
-  {0,0,1,1},
-  {0,0,0,1},
-  {1,0,0,1}
+  {1, 0, 0, 0},
+  {1, 1, 0, 0},
+  {0, 1, 0, 0},
+  {0, 1, 1, 0},
+  {0, 0, 1, 0},
+  {0, 0, 1, 1},
+  {0, 0, 0, 1},
+  {1, 0, 0, 1}
 };
 
-// ================= FUNCTION DECLARE =================
+// FUNCTION DECLARE
 
-void callbackState(CoapPacket &packet,
-                   IPAddress ip,
-                   int port);
+void callbackState(CoapPacket &packet, IPAddress ip, int port);
+void callbackMode(CoapPacket &packet, IPAddress ip, int port);
+void callbackServo1(CoapPacket &packet, IPAddress ip, int port);
+void callbackServo2(CoapPacket &packet, IPAddress ip, int port);
+void callbackUmbrella(CoapPacket &packet, IPAddress ip, int port);
+int readLDR(int pin);
 
-void callbackMode(CoapPacket &packet,
-                  IPAddress ip,
-                  int port);
-
-void callbackServo1(CoapPacket &packet,
-                    IPAddress ip,
-                    int port);
-
-void callbackServo2(CoapPacket &packet,
-                    IPAddress ip,
-                    int port);
-
-void callbackUmbrella(CoapPacket &packet,
-                      IPAddress ip,
-                      int port);
-
-// ================= MODE TEXT =================
+// TEXT / LOG / JSON
 
 String modeText()
 {
   return currentMode == MODE_AUTO ? "AUTO" : "MANUAL";
 }
-
-// ================= STATE TEXT =================
 
 String stateText(AppState state)
 {
@@ -174,16 +158,12 @@ String stateText(AppState state)
   {
     case STATE_WIFI_CONNECTING:
       return "WIFI_CONNECTING";
-
     case STATE_WIFI_LOST:
       return "WIFI_LOST";
-
     case STATE_AUTO_TRACKING:
       return "AUTO_TRACKING";
-
     case STATE_MANUAL_CONTROL:
       return "MANUAL_CONTROL";
-
     case STATE_RAIN_PROTECTION:
       return "RAIN_PROTECTION";
   }
@@ -191,7 +171,62 @@ String stateText(AppState state)
   return "UNKNOWN";
 }
 
-// ================= READ LDR =================
+void logCoapRx(const char* route, CoapPacket &packet, IPAddress ip, int port, const String &payload)
+{
+  Serial.print("[COAP RX] ");
+  Serial.print(route);
+  Serial.print(" -> ");
+  Serial.println(payload);
+}
+
+void sendCoapText(const char* route, IPAddress ip, int port, int messageid, const char* response)
+{
+  coap.sendResponse(ip, port, messageid, response);
+
+  Serial.print("[COAP TX] ");
+  Serial.print(route);
+  Serial.print(" -> ");
+  Serial.println(response);
+}
+
+String buildStateJson()
+{
+  String json = "{";
+
+  json += "\"lt\":" + String(readLDR(LDR_TOP_LEFT)) + ",";
+  json += "\"rt\":" + String(readLDR(LDR_TOP_RIGHT)) + ",";
+  json += "\"ld\":" + String(readLDR(LDR_BOTTOM_LEFT)) + ",";
+  json += "\"rd\":" + String(readLDR(LDR_BOTTOM_RIGHT)) + ",";
+  json += "\"v\":" + String(servovert) + ",";
+  json += "\"h\":" + String(servohori) + ",";
+  json += "\"rain\":" + String(rainDetected ? 1 : 0) + ",";
+  json += "\"umbrella\":" + String(umbrellaOpened ? 1 : 0);
+  json += "}";
+
+  return json;
+}
+
+void logSystem()
+{
+  if(millis() - lastLogTime < 1000)
+    return;
+
+  lastLogTime = millis();
+
+  Serial.println();
+  Serial.println("========== SYSTEM ==========");
+  Serial.print("Mode: ");
+  Serial.println(modeText());
+  Serial.print("State: ");
+  Serial.println(stateText(currentState));
+  Serial.print("Rain: ");
+  Serial.println(rainDetected);
+  Serial.print("Umbrella: ");
+  Serial.println(umbrellaOpened);
+  Serial.println("============================");
+}
+
+// SENSOR / PAYLOAD HELPERS
 
 int readLDR(int pin)
 {
@@ -205,14 +240,54 @@ int readLDR(int pin)
   return total / 10;
 }
 
-// ================= WIFI =================
+String getPayload(CoapPacket &packet)
+{
+  String payload = "";
+
+  for(int i = 0; i < packet.payloadlen; i++)
+  {
+    payload += (char)packet.payload[i];
+  }
+
+  payload.trim();
+  return payload;
+}
+
+bool verifySecret(CoapPacket &packet, String &data)
+{
+  String payload = getPayload(packet);
+  int index = payload.indexOf(':');
+
+  if(index < 0)
+  {
+    data = "";
+    return false;
+  }
+
+  String secret = payload.substring(0, index);
+  data = payload.substring(index + 1);
+  data.trim();
+
+  return secret == SECRET_KEY;
+}
+
+bool isHomePressed()
+{
+  if(digitalRead(LIMIT_SW) == LOW)
+  {
+    delay(20);
+    return digitalRead(LIMIT_SW) == LOW;
+  }
+
+  return false;
+}
+
+// WIFI / COAP
 
 void connectWiFi()
 {
   WiFi.mode(WIFI_STA);
-
-  WiFi.begin(WIFI_SSID,
-             WIFI_PASS);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   Serial.println();
   Serial.println("[WIFI] Connecting...");
@@ -220,8 +295,7 @@ void connectWiFi()
 
 void wifiTask()
 {
-  if(lastWiFiCheck != 0 &&
-     millis() - lastWiFiCheck < 5000)
+  if(lastWiFiCheck != 0 && millis() - lastWiFiCheck < 5000)
     return;
 
   lastWiFiCheck = millis();
@@ -234,7 +308,6 @@ void wifiTask()
 
       Serial.println();
       Serial.println("[WIFI] Reconnected");
-
       Serial.print("[WIFI] IP: ");
       Serial.println(WiFi.localIP());
     }
@@ -245,35 +318,20 @@ void wifiTask()
   wifiConnectedLogged = false;
 
   Serial.println("[WIFI] Reconnecting...");
-
   WiFi.disconnect();
-
-  WiFi.begin(WIFI_SSID,
-             WIFI_PASS);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 }
-
-// ================= COAP =================
 
 void startCoapServer()
 {
   if(coapStarted)
     return;
 
-  coap.server(callbackState,
-              "state");
-
-  coap.server(callbackMode,
-              "mode");
-
-  coap.server(callbackServo1,
-              "servo1");
-
-  coap.server(callbackServo2,
-              "servo2");
-
-  coap.server(callbackUmbrella,
-              "umbrella");
-
+  coap.server(callbackState, "state");
+  coap.server(callbackMode, "mode");
+  coap.server(callbackServo1, "servo1");
+  coap.server(callbackServo2, "servo2");
+  coap.server(callbackUmbrella, "umbrella");
   coap.start();
 
   coapStarted = true;
@@ -281,122 +339,14 @@ void startCoapServer()
   Serial.println("[COAP] Started");
 }
 
-// ================= PAYLOAD =================
-
-String getPayload(CoapPacket &packet)
-{
-  String payload = "";
-
-  for(int i = 0; i < packet.payloadlen; i++)
-  {
-    payload += (char)packet.payload[i];
-  }
-
-  payload.trim();
-
-  return payload;
-}
-
-bool verifySecret(CoapPacket &packet,
-                  String &data)
-{
-  String payload = getPayload(packet);
-
-  int index = payload.indexOf(':');
-
-  if(index < 0)
-  {
-    data = "";
-    return false;
-  }
-
-  String secret = payload.substring(0,
-                                    index);
-
-  data = payload.substring(index + 1);
-
-  data.trim();
-
-  return secret == SECRET_KEY;
-}
-
-// ================= COAP LOG =================
-
-void logCoapRx(const char* route,
-               CoapPacket &packet,
-               IPAddress ip,
-               int port,
-               const String &payload)
-{
-  Serial.print("[COAP RX] ");
-
-  Serial.print(route);
-
-  Serial.print(" -> ");
-
-  Serial.println(payload);
-}
-
-void sendCoapText(const char* route,
-                  IPAddress ip,
-                  int port,
-                  int messageid,
-                  const char* response)
-{
-  coap.sendResponse(ip,
-                    port,
-                    messageid,
-                    response);
-
-  Serial.print("[COAP TX] ");
-
-  Serial.print(route);
-
-  Serial.print(" -> ");
-
-  Serial.println(response);
-}
-
-// ================= SYSTEM JSON =================
-
-String buildStateJson()
-{
-  String json = "{";
-
-  json += "\"lt\":" + String(readLDR(LDR_TOP_LEFT)) + ",";
-  json += "\"rt\":" + String(readLDR(LDR_TOP_RIGHT)) + ",";
-  json += "\"ld\":" + String(readLDR(LDR_BOTTOM_LEFT)) + ",";
-  json += "\"rd\":" + String(readLDR(LDR_BOTTOM_RIGHT)) + ",";
-
-  json += "\"v\":" + String(servovert) + ",";
-  json += "\"h\":" + String(servohori) + ",";
-
-  json += "\"rain\":" + String(rainDetected ? 1 : 0) + ",";
-
-  json += "\"umbrella\":\"";
-
-  json += umbrellaOpened ? "OPEN" : "CLOSE";
-
-  json += "\"}";
-
-  return json;
-}
-
-// ================= STEPPER =================
+// STEPPER BASIC
 
 void writeStep(int stepIndex)
 {
-  digitalWrite(IN1,
-               stepSequence[stepIndex][0]);
-
-  digitalWrite(IN2,
-               stepSequence[stepIndex][1]);
-
-  digitalWrite(IN3,
-               stepSequence[stepIndex][2]);
-
-  digitalWrite(IN4,
-               stepSequence[stepIndex][3]);
+  digitalWrite(IN1, stepSequence[stepIndex][0]);
+  digitalWrite(IN2, stepSequence[stepIndex][1]);
+  digitalWrite(IN3, stepSequence[stepIndex][2]);
+  digitalWrite(IN4, stepSequence[stepIndex][3]);
 }
 
 void oneStep(int direction)
@@ -410,7 +360,6 @@ void oneStep(int direction)
     currentStep = 7;
 
   writeStep(currentStep);
-
   delay(STEP_DELAY_MS);
 }
 
@@ -427,13 +376,11 @@ void oneStepNoDelay(int direction)
   writeStep(currentStep);
 }
 
-void stepMotor(int steps,
-               int direction)
+void stepMotor(int steps, int direction)
 {
   for(int i = 0; i < steps; i++)
   {
     oneStep(direction);
-
     positionSteps += direction;
   }
 }
@@ -446,17 +393,7 @@ void motorOff()
   digitalWrite(IN4, LOW);
 }
 
-bool isHomePressed()
-{
-  if(digitalRead(LIMIT_SW) == LOW)
-  {
-    delay(20);
-
-    return digitalRead(LIMIT_SW) == LOW;
-  }
-
-  return false;
-}
+// UMBRELLA MOTOR
 
 bool homeMotor()
 {
@@ -464,20 +401,16 @@ bool homeMotor()
 
   int count = 0;
 
-  while(!isHomePressed() &&
-        count < MAX_HOME_STEPS)
+  while(!isHomePressed() && count < MAX_HOME_STEPS)
   {
     oneStep(-1);
-
     count++;
   }
 
   if(!isHomePressed())
   {
     Serial.println("[UMBRELLA] Home ERROR");
-
     motorOff();
-
     return false;
   }
 
@@ -486,14 +419,12 @@ bool homeMotor()
   Serial.println("[UMBRELLA] Home OK");
 
   delay(300);
-
   return true;
 }
 
 void openUmbrella()
 {
-  if(umbrellaOpened &&
-     umbrellaMotionState == UMBRELLA_IDLE)
+  if(umbrellaOpened && umbrellaMotionState == UMBRELLA_IDLE)
     return;
 
   if(umbrellaMotionState == UMBRELLA_OPENING)
@@ -502,18 +433,15 @@ void openUmbrella()
   Serial.println("[UMBRELLA] OPEN");
 
   umbrellaDirection = 1;
-  umbrellaTargetSteps =
-    constrain(STEPS_90_DEG - positionSteps,
-              0,
-              STEPS_90_DEG);
+  umbrellaTargetSteps = constrain(STEPS_90_DEG - positionSteps, 0, STEPS_90_DEG);
   umbrellaMovedSteps = 0;
+  lastUmbrellaStepMicros = 0;
   umbrellaMotionState = UMBRELLA_OPENING;
 }
 
 void startUmbrellaHome()
 {
-  if(umbrellaMotionState == UMBRELLA_HOMING ||
-     umbrellaMotionState == UMBRELLA_SETTLE)
+  if(umbrellaMotionState == UMBRELLA_HOMING || umbrellaMotionState == UMBRELLA_SETTLE)
     return;
 
   Serial.println("[UMBRELLA] CLOSE");
@@ -521,6 +449,7 @@ void startUmbrellaHome()
   umbrellaDirection = -1;
   umbrellaHomeSteps = 0;
   homePressedSince = 0;
+  lastUmbrellaStepMicros = 0;
   umbrellaMotionState = UMBRELLA_HOMING;
 }
 
@@ -530,27 +459,31 @@ void umbrellaMotionTask()
     return;
 
   unsigned long now = millis();
+  unsigned long nowMicros = micros();
   int stepsThisTask = 0;
+
+  if(lastUmbrellaStepMicros == 0)
+    lastUmbrellaStepMicros = nowMicros - UMBRELLA_STEP_DELAY_US;
 
   if(umbrellaMotionState == UMBRELLA_OPENING)
   {
     while(stepsThisTask < UMBRELLA_STEPS_PER_TASK &&
-          umbrellaMovedSteps < umbrellaTargetSteps)
+          umbrellaMovedSteps < umbrellaTargetSteps &&
+          nowMicros - lastUmbrellaStepMicros >= UMBRELLA_STEP_DELAY_US)
     {
+      lastUmbrellaStepMicros += UMBRELLA_STEP_DELAY_US;
       oneStepNoDelay(umbrellaDirection);
 
       positionSteps += umbrellaDirection;
       umbrellaMovedSteps++;
       stepsThisTask++;
-
-      if(umbrellaMovedSteps < umbrellaTargetSteps)
-        delayMicroseconds(UMBRELLA_STEP_DELAY_US);
     }
 
     if(umbrellaMovedSteps >= umbrellaTargetSteps)
     {
       umbrellaOpened = true;
       umbrellaMotionState = UMBRELLA_IDLE;
+      lastUmbrellaStepMicros = 0;
       motorOff();
     }
 
@@ -571,6 +504,7 @@ void umbrellaMotionTask()
       {
         positionSteps = 0;
         umbrellaSettleStart = now;
+        lastUmbrellaStepMicros = 0;
         umbrellaMotionState = UMBRELLA_SETTLE;
       }
 
@@ -585,24 +519,23 @@ void umbrellaMotionTask()
 
       umbrellaMotionState = UMBRELLA_IDLE;
       motorOff();
-
       return;
     }
 
-    while(stepsThisTask < UMBRELLA_STEPS_PER_TASK &&
-          umbrellaHomeSteps < MAX_HOME_STEPS)
+    while(stepsThisTask < UMBRELLA_STEPS_PER_TASK && umbrellaHomeSteps < MAX_HOME_STEPS)
     {
       if(digitalRead(LIMIT_SW) == LOW)
         return;
 
+      if(nowMicros - lastUmbrellaStepMicros < UMBRELLA_STEP_DELAY_US)
+        return;
+
+      lastUmbrellaStepMicros += UMBRELLA_STEP_DELAY_US;
       oneStepNoDelay(umbrellaDirection);
 
       positionSteps += umbrellaDirection;
       umbrellaHomeSteps++;
       stepsThisTask++;
-
-      if(stepsThisTask < UMBRELLA_STEPS_PER_TASK)
-        delayMicroseconds(UMBRELLA_STEP_DELAY_US);
     }
 
     return;
@@ -617,6 +550,7 @@ void umbrellaMotionTask()
 
     umbrellaOpened = false;
     umbrellaMotionState = UMBRELLA_IDLE;
+    lastUmbrellaStepMicros = 0;
     motorOff();
   }
 }
@@ -632,22 +566,19 @@ bool umbrellaIsClosing()
          umbrellaMotionState == UMBRELLA_SETTLE;
 }
 
-
 void closeUmbrella()
 {
-  if(!umbrellaOpened &&
-     umbrellaMotionState == UMBRELLA_IDLE)
+  if(!umbrellaOpened && umbrellaMotionState == UMBRELLA_IDLE)
     return;
 
   startUmbrellaHome();
 }
 
-// ================= RAIN TASK =================
+// MAIN ALGORITHMS
 
 void rainTask()
 {
-  rainDetected =
-    digitalRead(RAIN_SENSOR_PIN) == LOW;
+  rainDetected = digitalRead(RAIN_SENSOR_PIN) == LOW;
 
   if(rainDetected)
   {
@@ -663,8 +594,6 @@ void rainTask()
   umbrellaMotionTask();
 }
 
-// ================= AUTO TRACKING =================
-
 void autoTrackingTask()
 {
   if(millis() - lastTracking < 30)
@@ -679,7 +608,6 @@ void autoTrackingTask()
 
   int avt = (lt + rt) / 2;
   int avd = (ld + rd) / 2;
-
   int avl = (lt + ld) / 2;
   int avr = (rt + rd) / 2;
 
@@ -688,240 +616,136 @@ void autoTrackingTask()
 
   if(abs(dvert) > tolerance)
   {
-    servovert += avt > avd ?
-                 stepSize :
-                 -stepSize;
-
-    servovert = constrain(servovert,
-                          servovertLimitLow,
-                          servovertLimitHigh);
-
+    servovert += avt > avd ? stepSize : -stepSize;
+    servovert = constrain(servovert, servovertLimitLow, servovertLimitHigh);
     vertical.write(servovert);
   }
 
   if(abs(dhoriz) > tolerance)
   {
-    servohori += avl > avr ?
-                 -stepSize :
-                 stepSize;
-
-    servohori = constrain(servohori,
-                          servohoriLimitLow,
-                          servohoriLimitHigh);
-
+    servohori += avl > avr ? -stepSize : stepSize;
+    servohori = constrain(servohori, servohoriLimitLow, servohoriLimitHigh);
     horizontal.write(servohori);
   }
 }
 
-// ================= STATE MACHINE =================
-
 void updateStateMachine()
 {
   previousState = currentState;
+  rainDetected = digitalRead(RAIN_SENSOR_PIN) == LOW;
 
-  rainDetected =
-    digitalRead(RAIN_SENSOR_PIN) == LOW;
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
 
-  if(WiFi.status() != WL_CONNECTED)
+  if(wifiConnected)
+    wifiEverConnected = true;
+
+  if(!wifiConnected)
   {
-    if(wifiConnectedLogged)
+    if(wifiEverConnected)
     {
       currentState = STATE_WIFI_LOST;
     }
     else
     {
-      currentState =
-      STATE_WIFI_CONNECTING;
+      currentState = STATE_WIFI_CONNECTING;
     }
   }
   else if(currentMode == MODE_AUTO)
   {
     if(rainDetected)
     {
-      currentState =
-      STATE_RAIN_PROTECTION;
+      currentState = STATE_RAIN_PROTECTION;
     }
     else
     {
-      currentState =
-      STATE_AUTO_TRACKING;
+      currentState = STATE_AUTO_TRACKING;
     }
   }
   else
   {
-    currentState =
-    STATE_MANUAL_CONTROL;
+    currentState = STATE_MANUAL_CONTROL;
   }
 
   if(currentState != previousState)
   {
     Serial.print("[STATE] ");
-
     Serial.print(stateText(previousState));
-
     Serial.print(" -> ");
-
     Serial.println(stateText(currentState));
   }
 }
-
-// ================= SYSTEM LOG =================
-
-void logSystem()
-{
-  if(millis() - lastLogTime < 1000)
-    return;
-
-  lastLogTime = millis();
-
-  Serial.println();
-  Serial.println("========== SYSTEM ==========");
-
-  Serial.print("Mode: ");
-  Serial.println(modeText());
-
-  Serial.print("State: ");
-  Serial.println(stateText(currentState));
-
-  Serial.print("Rain: ");
-  Serial.println(rainDetected);
-
-  Serial.print("Umbrella: ");
-  Serial.println(umbrellaOpened);
-
-  Serial.println("============================");
-}
-
-// ================= RUN STATE =================
 
 void runStateAction()
 {
   switch(currentState)
   {
     case STATE_WIFI_CONNECTING:
-
       wifiTask();
       logSystem();
-
       break;
 
     case STATE_WIFI_LOST:
-
       wifiTask();
       logSystem();
-
       break;
 
     case STATE_AUTO_TRACKING:
-
       wifiTask();
-
       startCoapServer();
-
       coap.loop();
-
       logSystem();
-
       autoTrackingTask();
-
       rainTask();
-
       break;
 
     case STATE_MANUAL_CONTROL:
-
       wifiTask();
-
       startCoapServer();
-
       coap.loop();
-
       logSystem();
-
       umbrellaMotionTask();
-
       break;
 
     case STATE_RAIN_PROTECTION:
-
       wifiTask();
-
       startCoapServer();
-
       coap.loop();
-
       logSystem();
-
       autoTrackingTask();
-
       rainTask();
-
       break;
   }
 }
 
-// ================= COAP CALLBACK =================
+// COAP CALLBACKS
 
-void callbackState(CoapPacket &packet,
-                   IPAddress ip,
-                   int port)
+void callbackState(CoapPacket &packet, IPAddress ip, int port)
 {
   String payload = getPayload(packet);
-
   String data;
 
-  logCoapRx("state",
-            packet,
-            ip,
-            port,
-            payload);
+  logCoapRx("state", packet, ip, port, payload);
 
-  if(!verifySecret(packet,
-                   data))
+  if(!verifySecret(packet, data))
   {
-    sendCoapText("state",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "ERR_SECRET");
-
+    sendCoapText("state", ip, port, packet.messageid, "ERR_SECRET");
     return;
   }
 
-  String response =
-  buildStateJson();
-
-  sendCoapText("state",
-               ip,
-               port,
-               packet.messageid,
-               response.c_str());
+  String response = buildStateJson();
+  sendCoapText("state", ip, port, packet.messageid, response.c_str());
 }
 
-void callbackMode(CoapPacket &packet,
-                  IPAddress ip,
-                  int port)
+void callbackMode(CoapPacket &packet, IPAddress ip, int port)
 {
-  String payload =
-  getPayload(packet);
-
+  String payload = getPayload(packet);
   String data;
 
-  logCoapRx("mode",
-            packet,
-            ip,
-            port,
-            payload);
+  logCoapRx("mode", packet, ip, port, payload);
 
-  if(!verifySecret(packet,
-                   data))
+  if(!verifySecret(packet, data))
   {
-    sendCoapText("mode",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "ERR_SECRET");
-
+    sendCoapText("mode", ip, port, packet.messageid, "ERR_SECRET");
     return;
   }
 
@@ -930,146 +754,75 @@ void callbackMode(CoapPacket &packet,
   if(data == "AUTO")
   {
     currentMode = MODE_AUTO;
-
-    sendCoapText("mode",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "OK_AUTO");
+    sendCoapText("mode", ip, port, packet.messageid, "OK_AUTO");
   }
   else if(data == "MANUAL")
   {
     currentMode = MODE_MANUAL;
-
-    sendCoapText("mode",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "OK_MANUAL");
+    sendCoapText("mode", ip, port, packet.messageid, "OK_MANUAL");
   }
 }
 
-void callbackServo1(CoapPacket &packet,
-                    IPAddress ip,
-                    int port)
+void callbackServo1(CoapPacket &packet, IPAddress ip, int port)
 {
-  String payload =
-  getPayload(packet);
-
+  String payload = getPayload(packet);
   String data;
 
-  if(!verifySecret(packet,
-                   data))
+  if(!verifySecret(packet, data))
   {
-    sendCoapText("servo1",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "ERR_SECRET");
-
+    sendCoapText("servo1", ip, port, packet.messageid, "ERR_SECRET");
     return;
   }
 
   if(currentMode != MODE_MANUAL)
   {
-    sendCoapText("servo1",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "AUTO_MODE_ACTIVE");
-
+    sendCoapText("servo1", ip, port, packet.messageid, "AUTO_MODE_ACTIVE");
     return;
   }
 
-  servovert =
-  constrain(data.toInt(),
-            servovertLimitLow,
-            servovertLimitHigh);
-
+  servovert = constrain(data.toInt(), servovertLimitLow, servovertLimitHigh);
   vertical.write(servovert);
 
-  sendCoapText("servo1",
-               ip,
-               port,
-               packet.messageid,
-               "OK");
+  sendCoapText("servo1", ip, port, packet.messageid, "OK");
 }
 
-void callbackServo2(CoapPacket &packet,
-                    IPAddress ip,
-                    int port)
+void callbackServo2(CoapPacket &packet, IPAddress ip, int port)
 {
-  String payload =
-  getPayload(packet);
-
+  String payload = getPayload(packet);
   String data;
 
-  if(!verifySecret(packet,
-                   data))
+  if(!verifySecret(packet, data))
   {
-    sendCoapText("servo2",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "ERR_SECRET");
-
+    sendCoapText("servo2", ip, port, packet.messageid, "ERR_SECRET");
     return;
   }
 
   if(currentMode != MODE_MANUAL)
   {
-    sendCoapText("servo2",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "AUTO_MODE_ACTIVE");
-
+    sendCoapText("servo2", ip, port, packet.messageid, "AUTO_MODE_ACTIVE");
     return;
   }
 
-  servohori =
-  constrain(data.toInt(),
-            servohoriLimitLow,
-            servohoriLimitHigh);
-
+  servohori = constrain(data.toInt(), servohoriLimitLow, servohoriLimitHigh);
   horizontal.write(servohori);
 
-  sendCoapText("servo2",
-               ip,
-               port,
-               packet.messageid,
-               "OK");
+  sendCoapText("servo2", ip, port, packet.messageid, "OK");
 }
 
-void callbackUmbrella(CoapPacket &packet,
-                      IPAddress ip,
-                      int port)
+void callbackUmbrella(CoapPacket &packet, IPAddress ip, int port)
 {
-  String payload =
-  getPayload(packet);
-
+  String payload = getPayload(packet);
   String data;
 
-  if(!verifySecret(packet,
-                   data))
+  if(!verifySecret(packet, data))
   {
-    sendCoapText("umbrella",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "ERR_SECRET");
-
+    sendCoapText("umbrella", ip, port, packet.messageid, "ERR_SECRET");
     return;
   }
 
   if(currentMode != MODE_MANUAL)
   {
-    sendCoapText("umbrella",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "AUTO_MODE_ACTIVE");
-
+    sendCoapText("umbrella", ip, port, packet.messageid, "AUTO_MODE_ACTIVE");
     return;
   }
 
@@ -1078,72 +831,54 @@ void callbackUmbrella(CoapPacket &packet,
   if(data == "OPEN")
   {
     openUmbrella();
-
-    sendCoapText("umbrella",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "OPEN_OK");
+    sendCoapText("umbrella", ip, port, packet.messageid, "OPEN_OK");
   }
   else if(data == "CLOSE")
   {
     closeUmbrella();
-
-    sendCoapText("umbrella",
-                 ip,
-                 port,
-                 packet.messageid,
-                 "CLOSE_OK");
+    sendCoapText("umbrella", ip, port, packet.messageid, "CLOSE_OK");
   }
 }
 
-// ================= SETUP =================
+// SETUP
 
 void setup()
 {
   Serial.begin(115200);
 
   analogReadResolution(12);
-
   analogSetAttenuation(ADC_11db);
 
   horizontal.attach(SERVO_HORIZONTAL_PIN);
-
   vertical.attach(SERVO_VERTICAL_PIN);
 
   horizontal.write(servohori);
-
   vertical.write(servovert);
 
-  pinMode(RAIN_SENSOR_PIN,
-          INPUT);
+  pinMode(RAIN_SENSOR_PIN, INPUT);
 
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
   pinMode(IN4, OUTPUT);
 
-  pinMode(LIMIT_SW,
-          INPUT_PULLUP);
+  pinMode(LIMIT_SW, INPUT_PULLUP);
 
   motorOff();
 
   delay(500);
 
   homeMotor();
-
   connectWiFi();
-
   updateStateMachine();
 
   Serial.println("[APP] Solar Tracker Started");
 }
 
-// ================= LOOP =================
+// LOOP
 
 void loop()
 {
   updateStateMachine();
-
   runStateAction();
 }
