@@ -45,7 +45,7 @@ const int TRACKING_INTERVAL_MS = 80;
 // RAIN SENSOR
 
 #define RAIN_SENSOR_PIN 36
-const int RAIN_THRESHOLD = 2000;
+const int RAIN_THRESHOLD = 2000; //nguowngx mưa
 
 bool rainDetected = false;
 
@@ -57,19 +57,19 @@ bool rainDetected = false;
 #define IN4 14
 
 #define LIMIT_SW 12
-
+// đc bước
 const int STEPS_90_DEG = 1000;
 
 const int STEP_DELAY_MS = 2;
 const int UMBRELLA_STEP_DELAY_US = 2000;
-const int UMBRELLA_STEPS_PER_TASK = 1;
-const int HOME_DEBOUNCE_MS = 20;
-const int HOME_SETTLE_MS = 300;
+const int UMBRELLA_STEPS_PER_TASK = 1; // số bước mỗi lần chạy, để tránh block quá lâu
+const int HOME_DEBOUNCE_MS = 20; // tránh nhiễu công tắc hành trình
+const int HOME_SETTLE_MS = 300; // thời gian chờ sau khi đóng đến khi xác nhận đóng xong
 const int MAX_HOME_STEPS = 10000;
-const int UMBRELLA_OPEN_DIRECTION = -1;
+const int UMBRELLA_OPEN_DIRECTION = -1; //chiều quay ngược chiều kim đồng hồ
 const int UMBRELLA_CLOSE_DIRECTION = 1;
 
-int currentStep = 0;
+int currentStep = 0; // vị trí step hiện tại (0-7)
 long positionSteps = 0;
 
 bool umbrellaOpened = false;
@@ -129,7 +129,7 @@ Coap coap(udp);
 
 // STEP SEQUENCE
 
-const int stepSequence[8][4] = {
+const int stepSequence[8][4] = { // dùng half-step để quay mượt hơn
   {1, 0, 0, 0},
   {1, 1, 0, 0},
   {0, 1, 0, 0},
@@ -141,7 +141,7 @@ const int stepSequence[8][4] = {
 };
 
 // FUNCTION DECLARE
-
+//callback coap 
 void callbackState(CoapPacket &packet, IPAddress ip, int port);
 void callbackMode(CoapPacket &packet, IPAddress ip, int port);
 void callbackServo1(CoapPacket &packet, IPAddress ip, int port);
@@ -254,7 +254,7 @@ void logSystem()
 }
 
 // SENSOR / PAYLOAD HELPERS
-
+// đọc lấy trung bình
 int readLDR(int pin)
 {
   long total = 0;
@@ -346,7 +346,7 @@ void wifiTask()
 
   if(WiFi.status() == WL_CONNECTED)
   {
-    if(!wifiConnectedLogged)
+    if(!wifiConnectedLogged) // tránh in serial liên tục
     {
       wifiConnectedLogged = true;
 
