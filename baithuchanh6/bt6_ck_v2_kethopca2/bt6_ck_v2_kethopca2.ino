@@ -5,8 +5,8 @@
 
 // WIFI
 
-const char* WIFI_SSID = "Khu H";
-const char* WIFI_PASS = "khuh1234";
+const char* WIFI_SSID = "HOANG TAN";
+const char* WIFI_PASS = "0795617961";
 
 String SECRET_KEY = "SUNTRAC123";
 
@@ -38,12 +38,14 @@ int servovertLimitLow = 10;
 
 // TRACKING
 
-int tolerance = 150;
+int tolerance = 250;
 int stepSize = 1;
+const int TRACKING_INTERVAL_MS = 80;
 
 // RAIN SENSOR
 
 #define RAIN_SENSOR_PIN 36
+const int RAIN_THRESHOLD = 2000;
 
 bool rainDetected = false;
 
@@ -59,11 +61,13 @@ bool rainDetected = false;
 const int STEPS_90_DEG = 1000;
 
 const int STEP_DELAY_MS = 2;
-const int UMBRELLA_STEP_DELAY_US = 800;
-const int UMBRELLA_STEPS_PER_TASK = 4;
+const int UMBRELLA_STEP_DELAY_US = 2000;
+const int UMBRELLA_STEPS_PER_TASK = 1;
 const int HOME_DEBOUNCE_MS = 20;
 const int HOME_SETTLE_MS = 300;
-const int MAX_HOME_STEPS = 6000;
+const int MAX_HOME_STEPS = 10000;
+const int UMBRELLA_OPEN_DIRECTION = -1;
+const int UMBRELLA_CLOSE_DIRECTION = 1;
 
 int currentStep = 0;
 long positionSteps = 0;
@@ -144,6 +148,8 @@ void callbackServo1(CoapPacket &packet, IPAddress ip, int port);
 void callbackServo2(CoapPacket &packet, IPAddress ip, int port);
 void callbackUmbrella(CoapPacket &packet, IPAddress ip, int port);
 int readLDR(int pin);
+int readRainSensor();
+bool isRainDetected();
 
 // TEXT / LOG / JSON
 
@@ -200,7 +206,9 @@ String buildStateJson()
   json += "\"v\":" + String(servovert) + ",";
   json += "\"h\":" + String(servohori) + ",";
   json += "\"rain\":" + String(rainDetected ? 1 : 0) + ",";
-  json += "\"umbrella\":" + String(umbrellaOpened ? 1 : 0);
+  json += "\"umbrella\":" + String(umbrellaOpened ? 1 : 0) + ",";
+  json += "\"mode\":\"" + modeText() + "\",";
+  json += "\"state\":\"" + stateText(currentState) + "\"";
   json += "}";
 
   return json;
@@ -219,8 +227,27 @@ void logSystem()
   Serial.println(modeText());
   Serial.print("State: ");
   Serial.println(stateText(currentState));
+  Serial.print("IP: ");
+  if(WiFi.status() == WL_CONNECTED)
+    Serial.println(WiFi.localIP());
+  else
+    Serial.println("not_connected");
   Serial.print("Rain: ");
   Serial.println(rainDetected);
+  Serial.print("Sensors: LT=");
+  Serial.print(readLDR(LDR_TOP_LEFT));
+  Serial.print(" RT=");
+  Serial.print(readLDR(LDR_TOP_RIGHT));
+  Serial.print(" LD=");
+  Serial.print(readLDR(LDR_BOTTOM_LEFT));
+  Serial.print(" RD=");
+  Serial.print(readLDR(LDR_BOTTOM_RIGHT));
+  Serial.print(" RainRaw=");
+  Serial.print(readRainSensor());
+  Serial.print(" RainThreshold=");
+  Serial.print(RAIN_THRESHOLD);
+  Serial.print(" RainDetected=");
+  Serial.println(rainDetected ? 1 : 0);
   Serial.print("Umbrella: ");
   Serial.println(umbrellaOpened);
   Serial.println("============================");
@@ -238,6 +265,23 @@ int readLDR(int pin)
   }
 
   return total / 10;
+}
+
+int readRainSensor()
+{
+  long total = 0;
+
+  for(int i = 0; i < 10; i++)
+  {
+    total += analogRead(RAIN_SENSOR_PIN);
+  }
+
+  return total / 10;
+}
+
+bool isRainDetected()
+{
+  return readRainSensor() < RAIN_THRESHOLD;
 }
 
 String getPayload(CoapPacket &packet)
@@ -403,7 +447,7 @@ bool homeMotor()
 
   while(!isHomePressed() && count < MAX_HOME_STEPS)
   {
-    oneStep(-1);
+    oneStep(UMBRELLA_CLOSE_DIRECTION);
     count++;
   }
 
@@ -432,7 +476,7 @@ void openUmbrella()
 
   Serial.println("[UMBRELLA] OPEN");
 
-  umbrellaDirection = 1;
+  umbrellaDirection = UMBRELLA_OPEN_DIRECTION;
   umbrellaTargetSteps = constrain(STEPS_90_DEG - positionSteps, 0, STEPS_90_DEG);
   umbrellaMovedSteps = 0;
   lastUmbrellaStepMicros = 0;
@@ -446,7 +490,7 @@ void startUmbrellaHome()
 
   Serial.println("[UMBRELLA] CLOSE");
 
-  umbrellaDirection = -1;
+  umbrellaDirection = UMBRELLA_CLOSE_DIRECTION;
   umbrellaHomeSteps = 0;
   homePressedSince = 0;
   lastUmbrellaStepMicros = 0;
@@ -474,7 +518,7 @@ void umbrellaMotionTask()
       lastUmbrellaStepMicros += UMBRELLA_STEP_DELAY_US;
       oneStepNoDelay(umbrellaDirection);
 
-      positionSteps += umbrellaDirection;
+      positionSteps++;
       umbrellaMovedSteps++;
       stepsThisTask++;
     }
@@ -533,7 +577,9 @@ void umbrellaMotionTask()
       lastUmbrellaStepMicros += UMBRELLA_STEP_DELAY_US;
       oneStepNoDelay(umbrellaDirection);
 
-      positionSteps += umbrellaDirection;
+      if(positionSteps > 0)
+        positionSteps--;
+
       umbrellaHomeSteps++;
       stepsThisTask++;
     }
@@ -578,7 +624,7 @@ void closeUmbrella()
 
 void rainTask()
 {
-  rainDetected = digitalRead(RAIN_SENSOR_PIN) == LOW;
+  rainDetected = isRainDetected();
 
   if(rainDetected)
   {
@@ -596,7 +642,7 @@ void rainTask()
 
 void autoTrackingTask()
 {
-  if(millis() - lastTracking < 30)
+  if(millis() - lastTracking < TRACKING_INTERVAL_MS)
     return;
 
   lastTracking = millis();
@@ -632,7 +678,7 @@ void autoTrackingTask()
 void updateStateMachine()
 {
   previousState = currentState;
-  rainDetected = digitalRead(RAIN_SENSOR_PIN) == LOW;
+  rainDetected = isRainDetected();
 
   bool wifiConnected = WiFi.status() == WL_CONNECTED;
 
@@ -761,12 +807,18 @@ void callbackMode(CoapPacket &packet, IPAddress ip, int port)
     currentMode = MODE_MANUAL;
     sendCoapText("mode", ip, port, packet.messageid, "OK_MANUAL");
   }
+  else
+  {
+    sendCoapText("mode", ip, port, packet.messageid, "ERR_MODE");
+  }
 }
 
 void callbackServo1(CoapPacket &packet, IPAddress ip, int port)
 {
   String payload = getPayload(packet);
   String data;
+
+  logCoapRx("servo1", packet, ip, port, payload);
 
   if(!verifySecret(packet, data))
   {
@@ -791,6 +843,8 @@ void callbackServo2(CoapPacket &packet, IPAddress ip, int port)
   String payload = getPayload(packet);
   String data;
 
+  logCoapRx("servo2", packet, ip, port, payload);
+
   if(!verifySecret(packet, data))
   {
     sendCoapText("servo2", ip, port, packet.messageid, "ERR_SECRET");
@@ -813,6 +867,8 @@ void callbackUmbrella(CoapPacket &packet, IPAddress ip, int port)
 {
   String payload = getPayload(packet);
   String data;
+
+  logCoapRx("umbrella", packet, ip, port, payload);
 
   if(!verifySecret(packet, data))
   {
@@ -838,6 +894,10 @@ void callbackUmbrella(CoapPacket &packet, IPAddress ip, int port)
     closeUmbrella();
     sendCoapText("umbrella", ip, port, packet.messageid, "CLOSE_OK");
   }
+  else
+  {
+    sendCoapText("umbrella", ip, port, packet.messageid, "ERR_CMD");
+  }
 }
 
 // SETUP
@@ -848,6 +908,11 @@ void setup()
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
+  analogSetPinAttenuation(LDR_TOP_LEFT, ADC_11db);
+  analogSetPinAttenuation(LDR_TOP_RIGHT, ADC_11db);
+  analogSetPinAttenuation(LDR_BOTTOM_LEFT, ADC_11db);
+  analogSetPinAttenuation(LDR_BOTTOM_RIGHT, ADC_11db);
+  analogSetPinAttenuation(RAIN_SENSOR_PIN, ADC_11db);
 
   horizontal.attach(SERVO_HORIZONTAL_PIN);
   vertical.attach(SERVO_VERTICAL_PIN);
@@ -855,6 +920,10 @@ void setup()
   horizontal.write(servohori);
   vertical.write(servovert);
 
+  pinMode(LDR_TOP_LEFT, INPUT);
+  pinMode(LDR_TOP_RIGHT, INPUT);
+  pinMode(LDR_BOTTOM_LEFT, INPUT);
+  pinMode(LDR_BOTTOM_RIGHT, INPUT);
   pinMode(RAIN_SENSOR_PIN, INPUT);
 
   pinMode(IN1, OUTPUT);
