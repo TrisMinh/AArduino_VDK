@@ -18,6 +18,9 @@ Servo vertical;
 int servohori = 90;
 int servovert = 45;
 
+int targetServohori = 90;
+int targetServovert = 45;
+
 int servohoriLimitHigh = 170;
 int servohoriLimitLow = 10;
 
@@ -40,6 +43,8 @@ int servovertLimitLow = 10;
 
 int tolerance = 150;
 int stepSize = 1;
+
+const unsigned long MANUAL_SERVO_INTERVAL_MS = 25;
 
 // ================= RAIN SENSOR =================
 
@@ -92,6 +97,7 @@ unsigned long lastStepMicros = 0;
 unsigned long lastTracking = 0;
 unsigned long lastLogTime = 0;
 unsigned long lastWiFiCheck = 0;
+unsigned long lastManualServoMove = 0;
 
 bool wifiConnectedLogged = false;
 bool coapStarted = false;
@@ -174,6 +180,7 @@ void stepperTask();
 bool homeMotor();
 void openUmbrella();
 void closeUmbrella();
+void manualServoTask();
 
 // ================= MODE TEXT =================
 
@@ -710,6 +717,46 @@ void autoTrackingTask()
   }
 }
 
+// ================= MANUAL SERVO SMOOTH =================
+
+void manualServoTask()
+{
+  if(millis() - lastManualServoMove < MANUAL_SERVO_INTERVAL_MS)
+    return;
+
+  lastManualServoMove = millis();
+
+  if(servovert != targetServovert)
+  {
+    servovert +=
+    targetServovert > servovert ?
+    1 :
+    -1;
+
+    servovert =
+    constrain(servovert,
+              servovertLimitLow,
+              servovertLimitHigh);
+
+    vertical.write(servovert);
+  }
+
+  if(servohori != targetServohori)
+  {
+    servohori +=
+    targetServohori > servohori ?
+    1 :
+    -1;
+
+    servohori =
+    constrain(servohori,
+              servohoriLimitLow,
+              servohoriLimitHigh);
+
+    horizontal.write(servohori);
+  }
+}
+
 // ================= STATE MACHINE =================
 
 void updateStateMachine()
@@ -858,6 +905,8 @@ void runStateAction()
 
       logSystem();
 
+      manualServoTask();
+
       break;
 
     case STATE_RAIN_PROTECTION:
@@ -949,6 +998,8 @@ void callbackMode(CoapPacket &packet,
   if(data == "AUTO")
   {
     currentMode = MODE_AUTO;
+    targetServovert = servovert;
+    targetServohori = servohori;
 
     sendCoapText("mode",
                  ip,
@@ -959,6 +1010,8 @@ void callbackMode(CoapPacket &packet,
   else if(data == "MANUAL")
   {
     currentMode = MODE_MANUAL;
+    targetServovert = servovert;
+    targetServohori = servohori;
 
     sendCoapText("mode",
                  ip,
@@ -1000,12 +1053,10 @@ void callbackServo1(CoapPacket &packet,
     return;
   }
 
-  servovert =
+  targetServovert =
   constrain(data.toInt(),
             servovertLimitLow,
             servovertLimitHigh);
-
-  vertical.write(servovert);
 
   sendCoapText("servo1",
                ip,
@@ -1046,12 +1097,10 @@ void callbackServo2(CoapPacket &packet,
     return;
   }
 
-  servohori =
+  targetServohori =
   constrain(data.toInt(),
             servohoriLimitLow,
             servohoriLimitHigh);
-
-  horizontal.write(servohori);
 
   sendCoapText("servo2",
                ip,
